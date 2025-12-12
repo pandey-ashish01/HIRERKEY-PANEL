@@ -1,27 +1,59 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/config/db";
 import User from "@/lib/models/User";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { randomUUID } from "crypto";
+import jwt from "jsonwebtoken";
 
-const s3 = new S3Client({
-  region: process.env.AWS_REGION!,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
-});
+const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-this";
 
-// 🟢 GET USER BY ID
+// Helper to verify token
+async function verifyToken(token: string): Promise<any> {
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
+  }
+}
+
+// GET user by ID
 export async function GET(
   req: NextRequest,
-  context: { params: Promise<{ id: string }> } // ✅ must mark as Promise
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await context.params; // ✅ await params
-
+    const { id } = await context.params;
     await connectDB();
-    const user = await User.findById(id).populate("children", "name mobile");
+
+    // Get token
+    const authHeader = req.headers.get("authorization");
+    const token = authHeader?.split(" ")[1];
+    
+    if (!token) {
+      return NextResponse.json(
+        { success: false, message: "No token provided" },
+        { status: 401 }
+      );
+    }
+
+    // Verify token
+    const decoded = await verifyToken(token);
+    if (!decoded) {
+      return NextResponse.json(
+        { success: false, message: "Invalid token" },
+        { status: 401 }
+      );
+    }
+
+    // Fetch user
+    const user = await User.findById(id)
+      .select("-password")
+      .populate({
+        path: "children",
+        select: "name mobile email policeStation walletName walletAddress referralToken"
+      })
+      .populate({
+        path: "parentId",
+        select: "name mobile"
+      });
 
     if (!user) {
       return NextResponse.json(
@@ -30,7 +62,10 @@ export async function GET(
       );
     }
 
-    return NextResponse.json({ success: true, data: user });
+    return NextResponse.json({ 
+      success: true, 
+      data: user 
+    });
   } catch (error) {
     console.error("GET user error:", error);
     return NextResponse.json(
@@ -40,52 +75,67 @@ export async function GET(
   }
 }
 
-// 🟡 UPDATE USER
+// PUT - Update user profile
 export async function PUT(
   req: NextRequest,
-  context: { params: Promise<{ id: string }> } // ✅ fix type
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await context.params; // ✅ await params
+    const { id } = await context.params;
     await connectDB();
 
-    const formData = await req.formData();
-    const name = formData.get("name") as string;
-    const mobile = formData.get("mobile") as string; // ✅ added
-    const email = formData.get("email") as string;
-    const policeStation = formData.get("policeStation") as string;
-    const walletName = formData.get("walletName") as string;
-    const walletAddress = formData.get("walletAddress") as string;
-    const file = formData.get("paymentScreenshot") as File | null;
-
-    let updateData: any = {
-      name,
-      mobile,
-      email,
-      policeStation,
-      walletName,
-      walletAddress,
-    };
-
-    if (file) {
-      const fileName = `${randomUUID()}-${file.name}`;
-      const arrayBuffer = await file.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-
-      const putCommand = new PutObjectCommand({
-        Bucket: process.env.AWS_S3_BUCKET_NAME!,
-        Key: fileName,
-        Body: buffer,
-        ContentType: file.type,
-      });
-
-      await s3.send(putCommand);
-      updateData.paymentScreenshot = `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileName}`;
+    // Get token
+    const authHeader = req.headers.get("authorization");
+    const token = authHeader?.split(" ")[1];
+    
+    if (!token) {
+      return NextResponse.json(
+        { success: false, message: "No token provided" },
+        { status: 401 }
+      );
     }
 
-    const updatedUser = await User.findByIdAndUpdate(id, updateData, {
-      new: true,
-    });
+    // Verify token
+    const decoded = await verifyToken(token);
+    if (!decoded) {
+      return NextResponse.json(
+        { success: false, message: "Invalid token" },
+        { status: 401 }
+      );
+    }
+
+    // Check if user is updating themselves
+    if (decoded.userId !== id) {
+      return NextResponse.json(
+        { success: false, message: "You can only update your own profile" },
+        { status: 403 }
+      );
+    }
+
+    const body = await req.json();
+    const { name, email, policeStation, walletName, walletAddress } = body;
+
+    // Validate inputs
+    if (!name) {
+      return NextResponse.json(
+        { success: false, message: "Name is required!" },
+        { status: 400 }
+      );
+    }
+
+    // Update user
+    const updatedUser = await User.findByIdAndUpdate(
+      id,
+      {
+        name,
+        email: email || "",
+        policeStation: policeStation || "",
+        walletName: walletName || "",
+        walletAddress: walletAddress || "",
+        updatedAt: new Date()
+      },
+      { new: true, select: "-password" }
+    );
 
     if (!updatedUser) {
       return NextResponse.json(
@@ -96,26 +146,54 @@ export async function PUT(
 
     return NextResponse.json({
       success: true,
-      message: "User updated successfully",
-      data: updatedUser,
+      message: "Profile updated successfully!",
+      data: updatedUser
     });
   } catch (error) {
-    console.error("UPDATE user error:", error);
+    console.error("Error updating profile:", error);
     return NextResponse.json(
-      { success: false, message: "Error updating user" },
+      { success: false, message: "Error updating profile" },
       { status: 500 }
     );
   }
 }
 
-// 🔴 DELETE USER
+// DELETE user account
 export async function DELETE(
   req: NextRequest,
-  context: { params: Promise<{ id: string }> } // ✅ fix type
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await context.params; // ✅ await params
+    const { id } = await context.params;
     await connectDB();
+
+    // Get token
+    const authHeader = req.headers.get("authorization");
+    const token = authHeader?.split(" ")[1];
+    
+    if (!token) {
+      return NextResponse.json(
+        { success: false, message: "No token provided" },
+        { status: 401 }
+      );
+    }
+
+    // Verify token
+    const decoded = await verifyToken(token);
+    if (!decoded) {
+      return NextResponse.json(
+        { success: false, message: "Invalid token" },
+        { status: 401 }
+      );
+    }
+
+    // Check if user is deleting themselves
+    if (decoded.userId !== id) {
+      return NextResponse.json(
+        { success: false, message: "You can only delete your own account" },
+        { status: 403 }
+      );
+    }
 
     const user = await User.findById(id);
     if (!user) {
@@ -125,21 +203,24 @@ export async function DELETE(
       );
     }
 
+    // Remove from parent's children
     if (user.parentId) {
       await User.findByIdAndUpdate(user.parentId, {
         $pull: { children: user._id },
       });
     }
 
+    // Delete user
     await User.findByIdAndDelete(id);
+    
     return NextResponse.json({
       success: true,
-      message: "User deleted successfully",
+      message: "Account deleted successfully",
     });
   } catch (error) {
     console.error("DELETE user error:", error);
     return NextResponse.json(
-      { success: false, message: "Error deleting user" },
+      { success: false, message: "Error deleting account" },
       { status: 500 }
     );
   }

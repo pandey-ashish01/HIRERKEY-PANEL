@@ -1,16 +1,8 @@
+// app/api/join/[referralToken]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/config/db";
 import User from "@/lib/models/User";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { randomUUID } from "crypto";
-
-const s3 = new S3Client({
-  region: process.env.AWS_REGION!,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
-});
+import bcrypt from "bcryptjs";
 
 export async function POST(
   req: NextRequest,
@@ -20,7 +12,7 @@ export async function POST(
     await connectDB();
     const { referralToken } = await context.params;
 
-    // 1️⃣ Find parent user by referralToken (mobile)
+    // 1. Find parent user by referralToken (mobile)
     const parentUser = await User.findOne({ mobile: referralToken });
     if (!parentUser) {
       return NextResponse.json(
@@ -29,17 +21,40 @@ export async function POST(
       );
     }
 
-    // 2️⃣ Parse multipart form-data
-    const formData = await req.formData();
-    const name = formData.get("name") as string;
-    const mobile = formData.get("mobile") as string;
-    const email = formData.get("email") as string;
-    const policeStation = formData.get("policeStation") as string;
-    const walletName = formData.get("walletName") as string;
-    const walletAddress = formData.get("walletAddress") as string;
-    const file = formData.get("paymentScreenshot") as File | null;
+    // 2. Parse JSON body - ONLY REQUIRED FIELDS
+    const body = await req.json();
+    const { mobile, password, confirmPassword } = body;
 
-    // 3️⃣ Ensure unique mobile
+    // 3. Validate inputs - ONLY MOBILE AND PASSWORD ARE REQUIRED
+    if (!mobile || !password || !confirmPassword) {
+      return NextResponse.json(
+        { success: false, message: "Mobile and password are required!" },
+        { status: 400 }
+      );
+    }
+
+    if (password !== confirmPassword) {
+      return NextResponse.json(
+        { success: false, message: "Passwords do not match!" },
+        { status: 400 }
+      );
+    }
+
+    if (password.length < 6) {
+      return NextResponse.json(
+        { success: false, message: "Password must be at least 6 characters!" },
+        { status: 400 }
+      );
+    }
+
+    if (!mobile.match(/^\d{10}$/)) {
+      return NextResponse.json(
+        { success: false, message: "Valid 10-digit mobile number required!" },
+        { status: 400 }
+      );
+    }
+
+    // 4. Check if mobile already exists
     const existingUser = await User.findOne({ mobile });
     if (existingUser) {
       return NextResponse.json(
@@ -48,50 +63,53 @@ export async function POST(
       );
     }
 
-    // 4️⃣ Upload screenshot to S3 (if provided)
-    let paymentScreenshotUrl = "";
-    if (file) {
-      const fileName = `${randomUUID()}-${file.name}`;
-      const arrayBuffer = await file.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
+    // 5. Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
-      const putCommand = new PutObjectCommand({
-        Bucket: process.env.AWS_S3_BUCKET_NAME!,
-        Key: fileName,
-        Body: buffer,
-        ContentType: file.type,
-      });
-
-      await s3.send(putCommand);
-
-      paymentScreenshotUrl = `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileName}`;
-    }
-
-    // 5️⃣ Create user
+    // 6. Create user with only required fields
     const newUser = await User.create({
-      name,
+      name: `User_${mobile.substring(7)}`, // Auto-generated name with last 3 digits
       mobile,
-      email,
-      policeStation,
-      walletName,
-      walletAddress,
-      paymentScreenshot: paymentScreenshotUrl,
+      password: hashedPassword,
+      email: "", // Empty by default
+      policeStation: "", // Empty by default
+      walletName: "", // Empty by default
+      walletAddress: "", // Empty by default
       parentId: parentUser._id,
-      mainParentId: parentUser.mainParentId || parentUser._id,
       referralToken: mobile,
+      payments: [],
+      children: []
     });
 
-    // 6️⃣ Add to parent
+    // 7. Add to parent's children
     parentUser.children.push(newUser._id);
     await parentUser.save();
 
+    // 8. Return user data
+    const userResponse = {
+      _id: newUser._id,
+      name: newUser.name,
+      mobile: newUser.mobile,
+      referralToken: newUser.referralToken,
+      parentId: newUser.parentId,
+    };
+
     return NextResponse.json({
       success: true,
-      message: "User successfully added!",
-      data: newUser,
+      message: "Registration successful! You can now login.",
+      data: userResponse,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error while registering user:", error);
+    
+    if (error.code === 11000) {
+      return NextResponse.json(
+        { success: false, message: "Mobile number already exists!" },
+        { status: 400 }
+      );
+    }
+    
     return NextResponse.json(
       { success: false, message: "Something went wrong!" },
       { status: 500 }

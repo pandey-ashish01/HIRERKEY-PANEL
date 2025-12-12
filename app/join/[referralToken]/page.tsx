@@ -1,233 +1,304 @@
+// app/join/[referralToken]/page.tsx
 "use client";
-
-import { useState } from "react";
-import { useParams } from "next/navigation";
-import { toast, ToastContainer } from "react-toastify";
-import "react-toastify/dist/ReactToastify.css";
-import { Loader2, UploadCloud } from "lucide-react";
-import { motion } from "framer-motion";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useState, useEffect } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { Loader2, UserPlus, Lock, Phone, AlertCircle, CheckCircle } from "lucide-react";
 
 export default function JoinReferralForm() {
-  const { referralToken } = useParams<{ referralToken: string }>();
   const [loading, setLoading] = useState(false);
-
   const [form, setForm] = useState({
-    name: "",
     mobile: "",
-    email: "",
-    policeStation: "",
-    walletName: "",
-    walletAddress: "",
-    paymentScreenshot: null as File | null,
+    password: "",
+    confirmPassword: ""
   });
+  const [message, setMessage] = useState({ type: "", text: "" });
+  const [referralToken, setReferralToken] = useState<string>("");
+  const [validating, setValidating] = useState(true);
+  const [referrerInfo, setReferrerInfo] = useState<{ name: string; mobile: string } | null>(null);
+  
+  const params = useParams();
+  const router = useRouter();
+
+  useEffect(() => {
+    const validateReferralLink = async () => {
+      try {
+        if (params?.referralToken) {
+          const token = params.referralToken as string;
+          setReferralToken(token);
+          
+          // Fetch referrer info
+          const response = await fetch(`/api/users/referrer/${token}`);
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+              setReferrerInfo(data.data);
+            }
+          }
+          
+          setValidating(false);
+        } else {
+          setMessage({ 
+            type: "error", 
+            text: "Invalid referral link. Missing referral token!" 
+          });
+          setValidating(false);
+        }
+      } catch (error) {
+        console.error("Error validating referral:", error);
+        setValidating(false);
+      }
+    };
+
+    validateReferralLink();
+  }, [params]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] || null;
-    setForm((prev) => ({ ...prev, paymentScreenshot: file }));
+    setForm({ ...form, [e.target.name]: e.target.value });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!referralToken) {
-      toast.error("Invalid referral link!");
+    
+    // Validation
+    if (!form.mobile.match(/^\d{10}$/)) {
+      setMessage({ type: "error", text: "Please enter a valid 10-digit mobile number" });
+      return;
+    }
+    
+    if (form.password.length < 6) {
+      setMessage({ type: "error", text: "Password must be at least 6 characters" });
+      return;
+    }
+    
+    if (form.password !== form.confirmPassword) {
+      setMessage({ type: "error", text: "Passwords do not match" });
       return;
     }
 
     try {
       setLoading(true);
-      const formData = new FormData();
-      Object.entries(form).forEach(([key, value]) => {
-        if (value) formData.append(key, value as any);
-      });
-
-      const res = await fetch(`/api/join/${referralToken}`, {
+      setMessage({ type: "", text: "" });
+      
+      const response = await fetch(`/api/join/${referralToken}`, {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
       });
 
-      const data = await res.json();
+      const data = await response.json();
+      
       if (data.success) {
-        toast.success("🎉 Registration successful!");
-        setForm({
-          name: "",
-          mobile: "",
-          email: "",
-          policeStation: "",
-          walletName: "",
-          walletAddress: "",
-          paymentScreenshot: null,
+        setMessage({ 
+          type: "success", 
+          text: "🎉 Registration successful! Redirecting to login..." 
         });
+        
+        // Clear form
+        setForm({
+          mobile: "",
+          password: "",
+          confirmPassword: ""
+        });
+        
+        // Redirect to login after 2 seconds
+        setTimeout(() => {
+          router.push("/login");
+        }, 2000);
       } else {
-        toast.error(data.message || "Something went wrong!");
+        setMessage({ type: "error", text: data.message || "Registration failed!" });
       }
     } catch (err) {
-      toast.error("Network error!");
+      setMessage({ type: "error", text: "Network error! Please try again." });
       console.error(err);
     } finally {
       setLoading(false);
     }
   };
 
+  if (validating) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-indigo-100 dark:from-slate-900 dark:to-slate-800">
+        <div className="text-center">
+          <Loader2 className="animate-spin h-12 w-12 text-blue-600 dark:text-blue-400 mx-auto mb-4" />
+          <p className="text-gray-600 dark:text-gray-400">Validating referral link...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!referralToken) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-indigo-100 dark:from-slate-900 dark:to-slate-800 px-4">
+        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-md w-full text-center">
+          <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-4">Invalid Referral Link</h2>
+          <p className="text-gray-600 dark:text-gray-400 mb-6">The referral link you used is invalid or has expired.</p>
+          <a 
+            href="/login" 
+            className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition"
+          >
+            Go to Login
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-blue-100 dark:from-slate-900 dark:to-slate-800 px-6 py-10">
-      <ToastContainer position="top-right" autoClose={3000} />
-
-      <motion.div
-        initial={{ opacity: 0, y: 40 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
-        className="w-full "
-      >
-        <Card className="shadow-2xl border border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-slate-900/70 backdrop-blur-xl rounded">
-          <CardHeader className="text-center space-y-2 pb-0">
-            <CardTitle className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-              Join via Referral
-            </CardTitle>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              Referral Code:{" "}
-              <span className="font-semibold text-blue-600 dark:text-blue-400">
-                {referralToken}
-              </span>
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-indigo-100 dark:from-slate-900 dark:to-slate-800 px-4 py-8">
+      <div className="w-full max-w-md">
+        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 border border-gray-200 dark:border-slate-700">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full mb-4">
+              <UserPlus className="w-8 h-8 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-500 dark:to-indigo-500 bg-clip-text text-transparent mb-2">
+              Join Network
+            </h1>
+            
+            {referrerInfo && (
+              <div className="mb-4 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30 rounded-lg border border-blue-100 dark:border-blue-800/30">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">You are joining under:</p>
+                <p className="font-semibold text-gray-800 dark:text-white">{referrerInfo.name}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{referrerInfo.mobile}</p>
+              </div>
+            )}
+            
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Register with just your mobile number
             </p>
-          </CardHeader>
+            <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
+              You can update other details later in your profile
+            </p>
+          </div>
 
-          <CardContent className="mt-4">
-            <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Left column */}
-              <div className="space-y-5">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Full Name
-                  </label>
-                  <Input
-                    name="name"
-                    placeholder="Enter your full name"
-                    required
-                    value={form.name}
-                    onChange={handleChange}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Mobile Number
-                  </label>
-                  <Input
-                    name="mobile"
-                    placeholder="Enter your mobile number"
-                    type="tel"
-                    required
-                    value={form.mobile}
-                    onChange={handleChange}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Email Address
-                  </label>
-                  <Input
-                    name="email"
-                    placeholder="Enter your email"
-                    type="email"
-                    value={form.email}
-                    onChange={handleChange}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Police Station
-                  </label>
-                  <Input
-                    name="policeStation"
-                    placeholder="Enter your police station"
-                    value={form.policeStation}
-                    onChange={handleChange}
-                  />
-                </div>
+          {/* Message Display */}
+          {message.text && (
+            <div
+              className={`mb-6 p-4 rounded-lg text-sm font-medium ${
+                message.type === "success"
+                  ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800"
+                  : "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800"
+              }`}
+            >
+              <div className="flex items-start gap-2">
+                {message.type === "success" ? (
+                  <CheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                ) : (
+                  <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                )}
+                <span>{message.text}</span>
               </div>
+            </div>
+          )}
 
-              {/* Right column */}
-              <div className="space-y-5">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Wallet Name
-                  </label>
-                  <Input
-                    name="walletName"
-                    placeholder="Enter wallet name (e.g. Binance, Trust Wallet)"
-                    value={form.walletName}
-                    onChange={handleChange}
-                  />
+          {/* Registration Form */}
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
+                <Phone className="w-4 h-4" />
+                Mobile Number *
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <span className="text-gray-500 dark:text-gray-400">+91</span>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Wallet Address
-                  </label>
-                  <Input
-                    name="walletAddress"
-                    placeholder="Enter wallet address"
-                    value={form.walletAddress}
-                    onChange={handleChange}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Payment Screenshot
-                  </label>
-                  <label
-                    htmlFor="paymentScreenshot"
-                    className="flex items-center justify-between border border-dashed border-gray-300 dark:border-gray-700 rounded-lg p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-800 transition"
-                  >
-                    <span className="text-sm text-gray-600 dark:text-gray-300 truncate">
-                      {form.paymentScreenshot?.name ||
-                        "Click to upload payment screenshot"}
-                    </span>
-                    <UploadCloud className="w-5 h-5 text-blue-500" />
-                  </label>
-                  <input
-                    id="paymentScreenshot"
-                    name="paymentScreenshot"
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
-                </div>
-
-                <div className="pt-4">
-                  <Button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold shadow-md hover:shadow-lg transition-all py-2.5"
-                  >
-                    {loading ? (
-                      <>
-                        <Loader2 className="animate-spin mr-2 h-4 w-4" />
-                        Submitting...
-                      </>
-                    ) : (
-                      "Submit"
-                    )}
-                  </Button>
-                </div>
+                <input
+                  name="mobile"
+                  type="tel"
+                  placeholder="10-digit mobile number"
+                  required
+                  value={form.mobile}
+                  onChange={handleChange}
+                  maxLength={10}
+                  className="w-full pl-12 pr-4 py-3 border border-gray-300 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                />
               </div>
-            </form>
-          </CardContent>
-        </Card>
-      </motion.div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                This will be your login ID
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
+                <Lock className="w-4 h-4" />
+                Password *
+              </label>
+              <input
+                name="password"
+                type="password"
+                placeholder="Minimum 6 characters"
+                required
+                value={form.password}
+                onChange={handleChange}
+                className="w-full px-4 py-3 border border-gray-300 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
+                <Lock className="w-4 h-4" />
+                Confirm Password *
+              </label>
+              <input
+                name="confirmPassword"
+                type="password"
+                placeholder="Confirm your password"
+                required
+                value={form.confirmPassword}
+                onChange={handleChange}
+                className="w-full px-4 py-3 border border-gray-300 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+              />
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold py-3.5 rounded-lg transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="animate-spin h-5 w-5" />
+                    Creating Account...
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="w-5 h-5" />
+                    Join Network
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+
+          {/* Info Box */}
+          <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-lg border border-blue-100 dark:border-blue-800/30">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-gray-800 dark:text-gray-300 mb-1">
+                  Additional Information
+                </p>
+                <p className="text-xs text-gray-600 dark:text-gray-400">
+                  You can add your name, email, police station, and wallet details later in your profile settings after login.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="mt-6 text-center">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Already have an account?{" "}
+              <a href="/login" className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-semibold">
+                Login here
+              </a>
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,9 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/config/db";
-import User, { IUser } from "@/lib/models/User";
-import mongoose from "mongoose";
+import User from "@/lib/models/User";
+import jwt from "jsonwebtoken";
 
-// 🌳 Define a recursive type for the user tree
+const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-this";
+
+// Helper to verify token
+async function verifyToken(token: string): Promise<any> {
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
+  }
+}
+
+// Interface for tree node
 interface UserNode {
   _id: string;
   name: string;
@@ -12,49 +23,82 @@ interface UserNode {
   policeStation: string;
   walletName: string;
   walletAddress: string;
-  paymentScreenshot?: string; // ✅ Added this field
+  paymentScreenshot?: string;
   referralToken: string;
-  secretKey?: string | null;
+  parentId: string | null;
   children: UserNode[];
-}
-
-// 🧠 Recursive function to build the tree
-async function getUserTree(userId: string): Promise<UserNode | null> {
-  const user = (await User.findById(userId)
-    .select(
-      "name mobile email policeStation walletName walletAddress paymentScreenshot referralToken secretKey children" // ✅ Added paymentScreenshot here
-    )
-    .lean()) as IUser | null;
-
-  if (!user) return null;
-
-  // ✅ Ensure children is always an array of IDs
-  const childIds = (user.children as mongoose.Types.ObjectId[]) || [];
-
-  // 🌀 Recursively build children nodes
-  const children = await Promise.all(
-    childIds.map(async (childId) => {
-      return await getUserTree(childId.toString());
-    })
-  );
-
-  // ✅ Return structured tree node
-  return {
-    _id: String(user._id),
-    name: user.name,
-    mobile: user.mobile,
-    email: user.email,
-    policeStation: user.policeStation,
-    walletName: user.walletName,
-    walletAddress: user.walletAddress,
-    paymentScreenshot: user.paymentScreenshot, // ✅ Include paymentScreenshot in the response
-    referralToken: user.referralToken,
-    secretKey: user.secretKey || null,
-    children: children.filter((c): c is UserNode => c !== null),
+  level: number;
+  paymentSummary: {
+    totalAmount: number;
+    paymentCount: number;
+    lastPayment?: {
+      amount: number;
+      date: string;
+      screenshot: string;
+    };
   };
 }
 
-// 🚀 GET API endpoint
+// Recursive function to build tree
+async function getUserTree(
+  userId: string, 
+  currentDepth: number = 0,
+  maxDepth: number = 5
+): Promise<UserNode | null> {
+  if (currentDepth >= maxDepth) return null;
+
+  const user: any = await User.findById(userId)
+    .select("name mobile email policeStation walletName walletAddress paymentScreenshot referralToken parentId children payments")
+    .lean();
+
+  if (!user) return null;
+
+  // Calculate payment summary
+  const payments = user.payments || [];
+  const paymentSummary: UserNode["paymentSummary"] = {
+    totalAmount: payments.reduce((sum: number, p: any) => sum + (p.amount || 0), 0),
+    paymentCount: payments.length,
+  };
+
+  // Add last payment if exists
+  if (payments.length > 0) {
+    const sortedPayments = [...payments].sort(
+      (a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    const lastPayment = sortedPayments[0];
+    paymentSummary.lastPayment = {
+      amount: lastPayment.amount,
+      date: lastPayment.createdAt.toISOString(),
+      screenshot: lastPayment.screenshot,
+    };
+  }
+
+  // Get children
+  const childIds = user.children || [];
+  const children = await Promise.all(
+    childIds.map(async (childId: any) => {
+      return await getUserTree(childId.toString(), currentDepth + 1, maxDepth);
+    })
+  );
+
+  return {
+    _id: user._id.toString(),
+    name: user.name,
+    mobile: user.mobile,
+    email: user.email || "",
+    policeStation: user.policeStation || "",
+    walletName: user.walletName || "",
+    walletAddress: user.walletAddress || "",
+    paymentScreenshot: user.paymentScreenshot,
+    referralToken: user.referralToken,
+    parentId: user.parentId ? user.parentId.toString() : null,
+    children: children.filter((c): c is UserNode => c !== null),
+    level: currentDepth,
+    paymentSummary
+  };
+}
+
+// GET tree/hierarchy
 export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
@@ -62,6 +106,34 @@ export async function GET(
   try {
     const { id } = await context.params;
     await connectDB();
+
+    // Get token
+    const authHeader = req.headers.get("authorization");
+    const token = authHeader?.split(" ")[1];
+    
+    if (!token) {
+      return NextResponse.json(
+        { success: false, message: "No token provided" },
+        { status: 401 }
+      );
+    }
+
+    // Verify token
+    const decoded = await verifyToken(token);
+    if (!decoded) {
+      return NextResponse.json(
+        { success: false, message: "Invalid token" },
+        { status: 401 }
+      );
+    }
+
+    // Check if user is viewing their own tree
+    if (decoded.userId !== id) {
+      return NextResponse.json(
+        { success: false, message: "You can only view your own hierarchy" },
+        { status: 403 }
+      );
+    }
 
     const tree = await getUserTree(id);
 
@@ -72,7 +144,10 @@ export async function GET(
       );
     }
 
-    return NextResponse.json({ success: true, data: tree });
+    return NextResponse.json({ 
+      success: true, 
+      data: tree 
+    });
   } catch (error) {
     console.error("Error fetching user tree:", error);
     return NextResponse.json(
