@@ -212,6 +212,21 @@ export default function DashboardPage() {
     }
   }, [activeTab]);
 
+  // NEW: Add useEffect to fetch data when activeTab changes
+  useEffect(() => {
+    if (!user) return;
+    
+    // Fetch hierarchy data when hierarchy tab is active
+    if (activeTab === "hierarchy" && !hierarchyData) {
+      fetchHierarchy(user._id);
+    }
+    
+    // Fetch payments when account tab is active
+    if (activeTab === "account") {
+      fetchPayments(user._id);
+    }
+  }, [activeTab, user]);
+
   const fetchUserDetails = async (userId: string, token: string): Promise<void> => {
     try {
       const res = await fetch(`/api/users/${userId}`, {
@@ -260,40 +275,39 @@ export default function DashboardPage() {
     }
   };
 
-const fetchHierarchy = async (userId: string): Promise<void> => {
-  setHierarchyLoading(true);
-  try {
-    const token = localStorage.getItem("token");
+  const fetchHierarchy = async (userId: string): Promise<void> => {
+    setHierarchyLoading(true);
+    try {
+      const token = localStorage.getItem("token");
 
-    if (!token) {
-      console.error("No token found");
-      return;
+      if (!token) {
+        console.error("No token found");
+        return;
+      }
+
+      const hierarchyRes = await fetch(`/api/tree/${userId}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const hierarchyData = await hierarchyRes.json();
+
+      if (hierarchyData.success) {
+        const hierarchyWithPayments = await processHierarchyWithPayments(
+          hierarchyData.data,
+          token
+        );
+
+        setHierarchyData(hierarchyWithPayments);
+        setExpandedNodes(new Set([hierarchyWithPayments._id]));
+      }
+    } catch (error) {
+      console.error("Error fetching hierarchy:", error);
+    } finally {
+      setHierarchyLoading(false);
     }
-
-    const hierarchyRes = await fetch(`/api/tree/${userId}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    const hierarchyData = await hierarchyRes.json();
-
-    if (hierarchyData.success) {
-      const hierarchyWithPayments = await processHierarchyWithPayments(
-        hierarchyData.data,
-        token
-      );
-
-      setHierarchyData(hierarchyWithPayments);
-      setExpandedNodes(new Set([hierarchyWithPayments._id]));
-    }
-  } catch (error) {
-    console.error("Error fetching hierarchy:", error);
-  } finally {
-    setHierarchyLoading(false);
-  }
-};
-
+  };
 
   // Fetch payments for each user in the hierarchy recursively
   const processHierarchyWithPayments = async (node: any, token: string): Promise<UserNode> => {
@@ -1074,15 +1088,7 @@ const fetchHierarchy = async (userId: string): Promise<void> => {
           {tabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => {
-                setActiveTab(tab.id);
-                if (tab.id === "hierarchy" && !hierarchyData && user) {
-                  fetchHierarchy(user._id);
-                }
-                if (tab.id === "account" && user) {
-                  fetchPayments(user._id);
-                }
-              }}
+              onClick={() => setActiveTab(tab.id)}
               className={`flex flex-col items-center space-y-2 transition-all group ${
                 activeTab === tab.id 
                   ? isDarkMode 
