@@ -102,7 +102,7 @@ export default function JoinReferralForm() {
         
         // Redirect to login after 2 seconds
         setTimeout(() => {
-          router.push("/login");
+          router.push("Login");
         }, 2000);
       } else {
         setMessage({ type: "error", text: data.message || "Registration failed!" });
@@ -292,7 +292,7 @@ export default function JoinReferralForm() {
           <div className="mt-6 text-center">
             <p className="text-sm text-gray-600 dark:text-gray-400">
               Already have an account?{" "}
-              <a href="/login" className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-semibold">
+              <a href="Login" className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-semibold">
                 Login here
               </a>
             </p>
